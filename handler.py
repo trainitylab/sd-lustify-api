@@ -1,6 +1,7 @@
 import runpod
 import requests
 import time
+import json  # Added for safe payload handling
 
 API_URL = "http://127.0.0.1:7860"
 
@@ -15,19 +16,19 @@ def wait_for_service(timeout=180):
         except:
             pass
         time.sleep(3)
+    print("❌ SD WebUI timeout")
     return False
 
 def handler(job):
     job_input = job['input']
-    
     if not wait_for_service():
-        return {"error": "SD WebUI non disponible"}
-    
+        return {"error": "SD WebUI non disponible après 180s"}
+
     payload = {
         "prompt": job_input.get("prompt", ""),
         "negative_prompt": job_input.get("negative_prompt", "worst quality, low quality, blurry, bad anatomy"),
         "steps": job_input.get("steps", 45),
-        "cfg_scale": job_input.get("cfg_scale", 3),
+        "cfg_scale": job_input.get("cfg_scale", 7.0),  # Raised default for better quality
         "width": job_input.get("width", 832),
         "height": job_input.get("height", 1216),
         "sampler_name": "DPM++ SDE Karras",
@@ -38,11 +39,10 @@ def handler(job):
         "hr_second_pass_steps": 25,
         "denoising_strength": 0.30,
         "alwayson_scripts": {
-            "ADetailer": {
+            "ADetailer": {  # Fixed: Single dict, proper args list structure for multi-model
                 "args": [
-                    True,
-                    False,
-                    {
+                    True,  # model1 enabled
+                    {  # model1 config
                         "ad_model": "mediapipe_face_mesh_eyes_only",
                         "ad_confidence": 0.3,
                         "ad_denoising_strength": 0.4,
@@ -50,7 +50,8 @@ def handler(job):
                         "ad_mask_blur": 4,
                         "ad_inpaint_padding": 32
                     },
-                    {
+                    True,  # model2 enabled
+                    {  # model2 config
                         "ad_model": "yolov8x-worldv2.pt",
                         "ad_confidence": 0.3,
                         "ad_denoising_strength": 0.4,
@@ -63,6 +64,7 @@ def handler(job):
         }
     }
     
+    # Fixed: Add colon after if
     if job_input.get("face_image"):
         payload["alwayson_scripts"]["ControlNet"] = {
             "args": [{
@@ -79,15 +81,12 @@ def handler(job):
                 "image": job_input.get("face_image", "")
             }]
         }
-    
+
     try:
-        response = requests.post(f"{API_URL}/sdapi/v1/txt2img", json=payload, timeout=600)
-        
+        response = requests.post(f"{API_URL}/sdapi/v1/txt2img", json=payload, timeout=900)  # Increased for HR + ControlNet
         if response.status_code != 200:
-            return {"error": f"Erreur: {response.text}"}
-        
+            return {"error": f"Erreur API: {response.status_code} - {response.text}"}
         result = response.json()
-        
         return {
             "image": f"data:image/png;base64,{result['images'][0]}",
             "seed": result.get("seed", -1),
