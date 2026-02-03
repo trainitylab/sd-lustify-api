@@ -1,10 +1,12 @@
-FROM runpod/stable-diffusion:web-ui-10.2.1
+FROM runpod/stable-diffusion:web-ui-10.2.1 as builder
 
 WORKDIR /workspace/stable-diffusion-webui
 
+# Extensions
 RUN git clone https://github.com/Bing-su/adetailer.git extensions/adetailer && \
     git clone https://github.com/Mikubill/sd-webui-controlnet.git extensions/sd-webui-controlnet
 
+# Models (bake to reduce runtime)
 RUN mkdir -p models/Stable-diffusion && \
     curl -L -H "Authorization: Bearer 5a8a715385d19bc70872703503e89df5" \
     -o models/Stable-diffusion/lustify_sdxl.safetensors \
@@ -22,13 +24,25 @@ RUN mkdir -p models/ESRGAN && \
     cd models/ESRGAN && \
     wget https://github.com/xinntao/Real-ESRGAN/releases/download/v0.1.0/RealESRGAN_x4plus.pth
 
-RUN pip install runpod insightface onnxruntime-gpu
+# Install deps no-cache
+RUN pip install --no-cache-dir runpod insightface onnxruntime-gpu
 
 COPY handler.py /workspace/handler.py
 
+# Production stage (slim if possible, but keep for compatibility)
+FROM runpod/stable-diffusion:web-ui-10.2.1
+
 WORKDIR /workspace
+COPY --from=builder /workspace/stable-diffusion-webui /workspace/stable-diffusion-webui
+COPY --from=builder /workspace/handler.py .
+
 EXPOSE 7860
 
+HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=5 \
+  CMD curl -f http://127.0.0.1:7860/sdapi/v1/sd-models || exit 1
+
 CMD cd /workspace/stable-diffusion-webui && \
-    python launch.py --listen --port 7860 --api --xformers --no-half-vae --skip-torch-cuda-test & \
+    python launch.py \
+    --listen --port 7860 --api --xformers --medvram --no-half-vae \
+    --skip-torch-cuda-test --disable-all-extensions & \
     cd /workspace && python handler.py
